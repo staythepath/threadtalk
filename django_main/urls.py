@@ -16,8 +16,16 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from custom_activitypub.views import YourModelDetailView  # Adjust this import based on your structure
+from django_activitypub.views import webfinger, profile, followers, inbox, outbox
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path("", include("django_activitypub.urls")),  # Include activitypub URLs
+    path('pub/testuser/<int:pk>/', YourModelDetailView.as_view(), name='yourmodel_detail'),
+    path('pub/<str:username>/', profile, name='activitypub-profile'),
+    path('pub/<str:username>/followers/', followers, name='activitypub-followers'),
+    path('pub/<str:username>/inbox/', inbox, name='activitypub-inbox'),
+    path('pub/<str:username>/outbox/', outbox, name='activitypub-outbox'),
+    path('.well-known/webfinger', webfinger, name='webfinger'),
 ]

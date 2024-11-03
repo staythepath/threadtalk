@@ -1,0 +1,101 @@
+# import logging
+# from urllib.parse import urlparse
+# import base64
+# from cryptography.hazmat.primitives.asymmetric import padding
+# from cryptography.hazmat.primitives import hashes
+# from cryptography.hazmat.primitives.asymmetric import rsa, ed25519
+# from django_activitypub.signed_requests import HttpSignature, OriginalSignatureChecker, parse_signature_header, ValidateResult
+# from django_activitypub.signed_requests import content_digest_sha256  # Assuming this is where it's defined
+
+
+# class LoggingSignatureChecker(SignatureChecker):
+#     def __init__(self, obj: dict):
+#         logger.info("Initializing LoggingSignatureChecker with object: %s", obj)
+#         super().__init__(obj)  # Call the original constructor
+
+#     def validate(self, method, url, headers, body) -> ValidateResult:
+#         logging.info("Validating signature with method: %s, URL: %s", method, url)
+#         logging.info("Incoming headers: %s", headers)
+#         logging.info("Incoming body: %s", body)
+
+#         if 'signature' not in headers:
+#             logging.error("Missing signature header")
+#             return ValidateResult.fail('Missing signature header')
+
+#         if method.lower() == 'post':
+#             digest = content_digest_sha256(body)
+#             logging.info("Calculated digest: %s", digest)
+#             req_digest = headers['digest']
+#             req_digest = req_digest[:4].upper() + req_digest[4:]
+#             logging.info("Request digest: %s", req_digest)
+#             if digest != req_digest:
+#                 logging.error("Digest mismatch: calculated (%s) != request (%s)", digest, req_digest)
+#                 return ValidateResult.fail(f'Digest mismatch: {digest} != {req_digest}')
+#         else:
+#             digest = ''
+
+#         builder = HttpSignature()
+#         parsed = parse_signature_header(headers['signature'])
+#         logging.info("Parsed signature: %s", parsed)
+#         fields = parsed['headers'].split(' ')
+
+#         if "(request-target)" not in fields or "date" not in fields:
+#             logging.error("Missing required signature fields in %s", fields)
+#             return ValidateResult.fail(f'Missing required signature fields in {fields}')
+
+#         if digest and 'digest' not in fields:
+#             logging.error("Missing digest field")
+#             return ValidateResult.fail('Missing digest field')
+
+#         # TODO: check date is within acceptable range
+
+#         for field in fields:
+#             if field == "(request-target)":
+#                 parsed_url = urlparse(url)
+#                 builder.with_field(field, f"{method.lower()} {parsed_url.path}")
+#             else:
+#                 builder.with_field(field, headers[field])
+
+#         logging.info("Comparing key IDs: expected (%s) vs. parsed (%s)", self.key_id, parsed.get('keyId'))
+#         if self.key_id != parsed['keyId']:
+#             logging.error("Key ID mismatch: expected(%s) != parsed(%s)", self.key_id, parsed["keyId"])
+#             return ValidateResult.fail(f'Key ID mismatch: expected({self.key_id}) != parsed({parsed["keyId"]})')
+
+#         message = builder.build_message().encode('utf8')
+#         signature = base64.standard_b64decode(parsed['signature'])
+#         logging.info("Message to verify: %s", message)
+
+
+#         logging.info("RUNNING if")
+#         # TODO: support EC public keys
+#         if isinstance(self.public_key, rsa.RSAPublicKey):
+#             logging.info(":::::::::::::self.public_keys:", self.public_key)
+#             logging.info(":::::::::::::rsa.RSASPublicKKey:", rsa.RSAPublicKey)
+#             try:
+#                 self.public_key.verify(
+#                     signature,
+#                     message,
+#                     padding.PKCS1v15(),
+#                     hashes.SHA256(),
+#                 )
+            
+#                 logging.info("Signature verified successfully for RSA.")
+#                 return ValidateResult.success(self.controller)
+#             except InvalidSignature as f:
+#                 logging.error("Invalid signature for RSA: %s", f)
+#                 return ValidateResult.fail(f'Invalid signature: {f}')
+
+#         if isinstance(self.public_key, ed25519.Ed25519PublicKey):
+#             try:
+#                 self.public_key.verify(
+#                     signature,
+#                     message,
+#                 )
+#                 logging.info("Signature verified successfully for Ed25519.")
+#                 return ValidateResult.success(self.controller)
+#             except InvalidSignature as f:
+#                 logging.error("Invalid signature for Ed25519: %s", f)
+#                 return ValidateResult.fail(f'Invalid signature: {f}')
+
+#         logging.error("Unsupported public key type: %s", type(self.public_key))
+#         return ValidateResult.fail(f'Unsupported public key type: {type(self.public_key)}')
