@@ -1,0 +1,21 @@
+# Ignore private keys
+private.pem
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment files
+.env
+*.env
+
+# Django files
+db.sqlite3
+*.log
+
+# Ignore compiled files
+*.pyc
+
+# Ignore venv or conda environment
+venv/
+.env/
