@@ -22,7 +22,7 @@ from django_activitypub.views import webfinger, profile, followers, inbox, outbo
 urlpatterns = [
     path('admin/', admin.site.urls),
     path("", include("django_activitypub.urls")),  # Include activitypub URLs
-    path('pub/testuser/<int:pk>/', YourModelDetailView.as_view(), name='yourmodel_detail'),
+    path('pub/<str:username>/<int:pk>/', YourModelDetailView.as_view(), name='yourmodel_detail'),
     path('pub/<str:username>/', profile, name='activitypub-profile'),
     path('pub/<str:username>/followers/', followers, name='activitypub-followers'),
     path('pub/<str:username>/inbox/', inbox, name='activitypub-inbox'),
