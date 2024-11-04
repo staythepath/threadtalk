@@ -4,6 +4,7 @@ from .models import YourModel
 
 class YourModelDetailView(View):
     def get(self, request, username, pk, *args, **kwargs):
+        
         try:
             post = YourModel.objects.get(author__username=username, pk=pk)
             data = {
