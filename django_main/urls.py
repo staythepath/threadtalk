@@ -16,16 +16,23 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from custom_activitypub.views import YourModelDetailView  # Adjust this import based on your structure
+from custom_activitypub.views import PostDetailView, SetupServiceActorView, SendPostView, FollowUserView, UnfollowUserView, SetupPersonActorView, FollowCommunityView
 from django_activitypub.views import webfinger, profile, followers, inbox, outbox
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path("", include("django_activitypub.urls")),  # Include activitypub URLs
-    path('pub/<str:username>/<int:pk>/', YourModelDetailView.as_view(), name='yourmodel_detail'),
+    path('pub/<str:username>/<int:pk>/', PostDetailView.as_view(), name='yourmodel_detail'),
     path('pub/<str:username>/', profile, name='activitypub-profile'),
     path('pub/<str:username>/followers/', followers, name='activitypub-followers'),
     path('pub/<str:username>/inbox/', inbox, name='activitypub-inbox'),
     path('pub/<str:username>/outbox/', outbox, name='activitypub-outbox'),
     path('.well-known/webfinger', webfinger, name='webfinger'),
+    path('setup-service-actor/', SetupServiceActorView.as_view(), name='setup_service_actor'),
+    path('setup-person-actor/', SetupPersonActorView.as_view(), name='setup_person_actor'),
+    path('send-post/', SendPostView.as_view(), name='send_post'),
+    path('follow-user/', FollowUserView.as_view(), name='follow_user'),
+    path('unfollow-user/', UnfollowUserView.as_view(), name='unfollow_user'),
+    path('follow-community/', FollowCommunityView.as_view(), name='follow_community'),
+
 ]

@@ -12,8 +12,16 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from pathlib import Path
 
+import os
+import sys
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Add 'plemmy' folder to Python path if imports aren't recognized
+sys.path.insert(0, os.path.join(BASE_DIR, "plemmy"))
+
+
 
 
 # Quick-start development settings - unsuitable for production
