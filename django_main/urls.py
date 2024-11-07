@@ -16,7 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from custom_activitypub.views import PostDetailView, SetupServiceActorView, SendPostView, FollowUserView, UnfollowUserView, SetupPersonActorView, FollowCommunityView
+from custom_activitypub.views import PostDetailView, SetupServiceActorView, SendPostView, FollowUserView, UnfollowUserView, SetupPersonActorView, FollowCommunityView, CommunityDetailView
 from django_activitypub.views import webfinger, profile, followers, inbox, outbox
 
 urlpatterns = [
@@ -34,5 +34,6 @@ urlpatterns = [
     path('follow-user/', FollowUserView.as_view(), name='follow_user'),
     path('unfollow-user/', UnfollowUserView.as_view(), name='unfollow_user'),
     path('follow-community/', FollowCommunityView.as_view(), name='follow_community'),
+    path('c/<str:community_name>/', CommunityDetailView.as_view(), name='community_detail'),
 
 ]

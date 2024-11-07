@@ -49,13 +49,15 @@ def webfinger(request):
 
     try:
         actor = LocalActor.objects.get(preferred_username=username, domain=domain)
-        #logger.debug("Found LocalActor: %s", actor)
+        logger.debug("Found LocalActor: %s", actor)
     except LocalActor.DoesNotExist:
         logger.error("No actor found for username: %s, domain: %s", username, domain)
         return JsonResponse({'error': 'no actor by that name'}, status=404)
 
     # Force HTTPS in the generated URL
     profile_url = f"https://{domain}{reverse('activitypub-profile', kwargs={'username': actor.preferred_username})}"
+    
+    # Base WebFinger data structure
     data = {
         'subject': f'acct:{actor.preferred_username}@{actor.domain}',
         'links': [
@@ -66,8 +68,18 @@ def webfinger(request):
             }
         ]
     }
-    logger.debug("WebFinger response data: %s", json.dumps(data, indent=2))
 
+    # Add community-specific details if the actor is a COMMUNITY
+    if actor.actor_type == ActorChoices.COMMUNITY:
+        data['community'] = {
+            'name': actor.name,
+            'description': actor.summary,
+            'type': 'Community',
+            'id': profile_url,
+        }
+        logger.debug("Added community-specific details to WebFinger response.")
+
+    # Include icon URL if available
     if actor.icon:
         icon_url = f"https://{domain}{actor.icon.url}"
         logger.debug("Actor icon URL: %s", icon_url)
@@ -77,7 +89,9 @@ def webfinger(request):
             'href': icon_url,
         })
 
+    logger.debug("WebFinger response data: %s", json.dumps(data, indent=2))
     return JsonResponse(data, content_type="application/jrd+json")
+
 
 
 
@@ -88,12 +102,13 @@ def profile(request, username):
     except LocalActor.DoesNotExist:
         return JsonResponse({}, status=404)
 
+    actor_type = ActorChoices(actor.actor_type).label
     data = {
         '@context': [
             'https://www.w3.org/ns/activitystreams',
             'https://w3id.org/security/v1',
         ],
-        'type': ActorChoices(actor.actor_type).label,
+        'type': actor_type,
         'discoverable': True,
         'preferredUsername': actor.preferred_username,
         'name': actor.name,
@@ -121,6 +136,15 @@ def profile(request, username):
             'mediaType': 'image/jpeg',  # todo make this dynamic
             'url': request.build_absolute_uri(actor.image.url),
         }
+
+    if actor.actor_type == ActorChoices.COMMUNITY:
+        data.update({
+            'name': actor.community_name,
+            'summary': actor.community_description,
+            'type': 'Group',  # ActivityPub type for community
+        })
+
+    return JsonResponse(data, content_type="application/activity+json")
 
     return JsonResponse(data, content_type="application/activity+json")
 

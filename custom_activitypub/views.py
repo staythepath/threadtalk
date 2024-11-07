@@ -6,6 +6,8 @@ from django.contrib.auth import get_user_model  # Import for user model
 from django_activitypub.models import LocalActor, Note, RemoteActor, Follower  # Required models from django_activitypub
 from django_activitypub.signed_requests import signed_post  # Required for signed requests
 from django_activitypub.webfinger import finger  # Required for WebFinger lookup
+from django.shortcuts import render, get_object_or_404
+from django_activitypub.models import LocalActor
 import json
 import uuid  # Required for generating unique IDs in Follow/Unfollow activities
 from .models import YourModel
@@ -236,6 +238,34 @@ class FollowCommunityView(View):
             return JsonResponse({"message": f"Successfully followed community {community_url}"})
         else:
             return JsonResponse({"error": f"Failed to follow community: {response.status_code} {response.text}"})
+        
+from django.http import JsonResponse
+from django.views import View
+from django.shortcuts import get_object_or_404
+from django_activitypub.models import LocalActor
 
+class CommunityDetailView(View):
+    def get(self, request, community_name, *args, **kwargs):
+        # Fetch the community actor using the community name
+        community_actor = get_object_or_404(LocalActor, community_name=community_name)
+
+        # Construct the full JSON response with all required fields
+        data = {
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "id": community_actor.account_url,  # Full URL for this community actor
+            "type": "Group",
+            "name": community_actor.name,
+            "summary": community_actor.community_description,
+            "preferredUsername": community_actor.preferred_username,
+            "inbox": community_actor.inbox,  # Inbox URL for receiving activities
+            "outbox": community_actor.outbox,  # Outbox URL for sending activities
+            "followers": f"{community_actor.account_url}/followers",  # Followers URL
+            "publicKey": {
+                "id": f"{community_actor.account_url}#main-key",
+                "owner": community_actor.account_url,
+                "publicKeyPem": community_actor.public_key  # Actor's public key
+            }
+        }
+        return JsonResponse(data, content_type="application/activity+json")
 
 

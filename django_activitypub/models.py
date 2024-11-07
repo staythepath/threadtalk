@@ -18,6 +18,7 @@ from django_activitypub.webfinger import fetch_remote_profile, finger
 class ActorChoices(models.TextChoices):
     PERSON = 'P', 'Person'
     SERVICE = 'S', 'Service'
+    COMMUNITY = 'C', 'Community'
 
 
 class LocalActorManager(models.Manager):
@@ -34,7 +35,7 @@ class LocalActor(models.Model):
     user = models.OneToOneField(get_user_model(), on_delete=models.CASCADE)
     private_key = models.TextField(blank=True, editable=False)
     public_key = models.TextField(blank=True, editable=False)
-    actor_type = models.CharField(max_length=1, choices=ActorChoices, default=ActorChoices.PERSON)
+    actor_type = models.CharField(max_length=1, choices=ActorChoices.choices, default=ActorChoices.PERSON)
     preferred_username = models.SlugField(max_length=255)
     domain = models.CharField(max_length=255)
     name = models.CharField(max_length=255)
@@ -42,10 +43,15 @@ class LocalActor(models.Model):
     icon = models.ImageField(upload_to='actor-media', null=True, blank=True)
     image = models.ImageField(upload_to='actor-media', null=True, blank=True)
     followers = models.ManyToManyField(
-        'RemoteActor', through='Follower', related_name='followers',
-        through_fields=('following', 'remote_actor'),
+        'RemoteActor', 
+        through='Follower', 
+        related_name='followers',
+        through_fields=('following', 'remote_actor')
     )
-
+    inbox = models.URLField(null=True, blank=True)
+    outbox = models.URLField(null=True, blank=True)
+    community_name = models.CharField(max_length=255, null=True, blank=True)
+    community_description = models.TextField(null=True, blank=True)
     objects = LocalActorManager()
 
     class Meta:
@@ -83,7 +89,14 @@ class LocalActor(models.Model):
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo
             ).decode('utf-8')
+            
+            # Set default values for community if it's a community actor
+            if self.actor_type == ActorChoices.COMMUNITY:
+                self.name = self.community_name or "Unnamed Community"
+                self.summary = self.community_description or "A community on this server."
+                
         super().save(*args, **kwargs)
+
 
     def private_key_obj(self):
         return serialization.load_pem_private_key(
