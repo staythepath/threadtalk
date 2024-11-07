@@ -1,6 +1,6 @@
 # Ignore private keys
 private.pem
-test_plemmy.py
+#test_plemmy.py
 
 # Python cache
 __pycache__/
