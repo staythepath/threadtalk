@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth import get_user_model
 from django_activitypub.models import LocalActor, Note
 from django.http import JsonResponse
+import json
 
 class YourModel(models.Model):
     author = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='yourmodel_posts')
@@ -18,18 +19,34 @@ class YourModel(models.Model):
 
 
 
-    def publish(self, base_uri):
-        actor, created = LocalActor.objects.get_or_create(user=self.author, defaults={
-            'preferred_username': self.author.username,
-            'domain': 'ap.staythepath.lol',  # Ensure this is set correctly
-            'name': self.author.username  # Set other fields if necessary
-        })
-        Note.objects.upsert(
-            base_uri=base_uri,
-            local_actor=actor,
-            content=self.formatted_content(),
-            content_url=f'{base_uri}{self.get_absolute_url()}'  # Corrected with updated get_absolute_url
+    def publish(self, base_uri, activity_data=None):
+        actor, created = LocalActor.objects.get_or_create(
+            user=self.author,
+            defaults={
+                'preferred_username': self.author.username,
+                'domain': 'ap.staythepath.lol',
+                'name': self.author.username
+            }
         )
+
+        if activity_data:
+            # For Lemmy, send the entire `activity_data` as content, which Lemmy expects
+            Note.objects.upsert(
+                base_uri=base_uri,
+                local_actor=actor,
+                content=json.dumps(activity_data),  # Embed Lemmy data
+                content_url=activity_data.get("id", f'{base_uri}{self.get_absolute_url()}')
+            )
+        else:
+            # For Mastodon, post a simpler note without additional `activity_data`
+            Note.objects.upsert(
+                base_uri=base_uri,
+                local_actor=actor,
+                content=self.formatted_content(),
+                content_url=f'{base_uri}{self.get_absolute_url()}'
+            )
+
+
 
     def get(self, request, username, pk, *args, **kwargs):
         try:

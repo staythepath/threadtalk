@@ -17,10 +17,13 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+
+
 def webfinger(request):
     resource = request.GET.get('resource')
     logger.debug("Received WebFinger request for resource: %s", resource)
-    
+
+    # Match resource formats and extract username/domain
     acct_m = re.match(r'^acct:(?P<username>.+?)@(?P<domain>.+)$', resource)
     if acct_m:
         username = acct_m.group('username')
@@ -47,6 +50,7 @@ def webfinger(request):
         logger.error("Unsupported resource format")
         return JsonResponse({'error': 'unsupported resource'}, status=404)
 
+    # Retrieve the actor based on parsed username and domain
     try:
         actor = LocalActor.objects.get(preferred_username=username, domain=domain)
         logger.debug("Found LocalActor: %s", actor)
@@ -54,45 +58,61 @@ def webfinger(request):
         logger.error("No actor found for username: %s, domain: %s", username, domain)
         return JsonResponse({'error': 'no actor by that name'}, status=404)
 
-    # Force HTTPS in the generated URL
+    # Generate HTTPS-based profile and endpoint URLs
     profile_url = f"https://{domain}{reverse('activitypub-profile', kwargs={'username': actor.preferred_username})}"
+    followers_url = f"{profile_url}followers/"
+    outbox_url = f"{profile_url}outbox/"
+    inbox_url = f"{profile_url}inbox/"
     
-    # Base WebFinger data structure
+    # Base WebFinger response with required links
     data = {
         'subject': f'acct:{actor.preferred_username}@{actor.domain}',
+        'aliases': [
+            profile_url,  # Add alias for actor's profile page
+            f"https://{domain}/@{actor.preferred_username}"  # Commonly expected format
+        ],
         'links': [
             {
                 'rel': 'self',
                 'type': 'application/activity+json',
                 'href': profile_url,
+            },
+            {
+                'rel': 'http://webfinger.net/rel/profile-page',
+                'type': 'text/html',
+                'href': f"https://{domain}/@{actor.preferred_username}"  # HTML profile
+            },
+            {
+                'rel': 'followers',
+                'type': 'application/activity+json',
+                'href': followers_url,
+            },
+            {
+                'rel': 'outbox',
+                'type': 'application/activity+json',
+                'href': outbox_url,
+            },
+            {
+                'rel': 'inbox',
+                'type': 'application/activity+json',
+                'href': inbox_url,
             }
         ]
     }
 
-    # Add community-specific details if the actor is a COMMUNITY
-    if actor.actor_type == ActorChoices.COMMUNITY:
-        data['community'] = {
-            'name': actor.name,
-            'description': actor.summary,
-            'type': 'Community',
-            'id': profile_url,
-        }
-        logger.debug("Added community-specific details to WebFinger response.")
-
-    # Include icon URL if available
+    # Optional icon/avatar support for WebFinger
     if actor.icon:
         icon_url = f"https://{domain}{actor.icon.url}"
         logger.debug("Actor icon URL: %s", icon_url)
         data['links'].append({
             'rel': 'http://webfinger.net/rel/avatar',
-            'type': 'image/jpeg',
+            'type': 'image/jpeg',  # Adjust as needed based on your file type
             'href': icon_url,
         })
 
+    # Additional logging for final WebFinger data structure
     logger.debug("WebFinger response data: %s", json.dumps(data, indent=2))
     return JsonResponse(data, content_type="application/jrd+json")
-
-
 
 
 
@@ -103,16 +123,17 @@ def profile(request, username):
         return JsonResponse({}, status=404)
 
     actor_type = ActorChoices(actor.actor_type).label
+
+    # Add required context for Lemmy compatibility
     data = {
         '@context': [
             'https://www.w3.org/ns/activitystreams',
             'https://w3id.org/security/v1',
+            'https://join-lemmy.org/context.json'  # Lemmy context
         ],
         'type': actor_type,
         'discoverable': True,
         'preferredUsername': actor.preferred_username,
-        'name': actor.name,
-        'summary': actor.summary,
         'id': request.build_absolute_uri(reverse('activitypub-profile', kwargs={'username': actor.preferred_username})).replace("http://", "https://"),
         'followers': request.build_absolute_uri(reverse('activitypub-followers', kwargs={'username': actor.preferred_username})).replace("http://", "https://"),
         'inbox': request.build_absolute_uri(reverse('activitypub-inbox', kwargs={'username': actor.preferred_username})).replace("http://", "https://"),
@@ -124,27 +145,74 @@ def profile(request, username):
         }
     }
 
+    # Ensure name and summary are included, particularly for community actor types
+    data['name'] = actor.name if actor.name else "Community Actor Name"  # Default if name is empty
+    data['summary'] = actor.summary if actor.summary else "A brief description of the community actor"  # Default if summary is empty
+
+    # Add optional icon and image
     if actor.icon:
         data['icon'] = {
             'type': 'Image',
-            'mediaType': 'image/jpeg',  # todo make this dynamic
+            'mediaType': 'image/jpeg',  # Make this dynamic if needed
             'url': request.build_absolute_uri(actor.icon.url),
         }
     if actor.image:
         data['image'] = {
             'type': 'Image',
-            'mediaType': 'image/jpeg',  # todo make this dynamic
+            'mediaType': 'image/jpeg',  # Make this dynamic if needed
             'url': request.build_absolute_uri(actor.image.url),
         }
 
+    # Specifically handle community actors by setting the type to "Group"
     if actor.actor_type == ActorChoices.COMMUNITY:
-        data.update({
-            'name': actor.community_name,
-            'summary': actor.community_description,
-            'type': 'Group',  # ActivityPub type for community
-        })
+        data['type'] = 'Group'  # Sets type for ActivityPub compatibility with community actors
 
     return JsonResponse(data, content_type="application/activity+json")
+
+def community_profile(request, community_name):
+    try:
+        # Fetch the community actor by name (use the field that stores community names)
+        actor = LocalActor.objects.get(preferred_username=community_name, actor_type="community")
+    except LocalActor.DoesNotExist:
+        return JsonResponse({"error": "Community not found"}, status=404)
+
+    # Build ActivityPub-compatible response for community actor
+    data = {
+        "@context": [
+            "https://www.w3.org/ns/activitystreams",
+            "https://w3id.org/security/v1",
+            "https://join-lemmy.org/context.json"  # Lemmy-specific context
+        ],
+        "type": "Group",  # Set type to "Group" for communities
+        "discoverable": True,
+        "preferredUsername": actor.preferred_username,
+        "id": request.build_absolute_uri(reverse("community_detail", kwargs={"community_name": community_name})),
+        "followers": request.build_absolute_uri(reverse("community-followers", kwargs={"community_name": community_name})),
+        "inbox": request.build_absolute_uri(reverse("community-inbox", kwargs={"community_name": community_name})),
+        "outbox": request.build_absolute_uri(reverse("community-outbox", kwargs={"community_name": community_name})),
+        "publicKey": {
+            "id": request.build_absolute_uri(reverse("community_detail", kwargs={"community_name": community_name})) + "#main-key",
+            "owner": request.build_absolute_uri(reverse("community_detail", kwargs={"community_name": community_name})),
+            "publicKeyPem": actor.public_key,
+        },
+        # Basic community metadata
+        "name": actor.name or "Community Name",  # Replace with actual community name or a placeholder
+        "summary": actor.summary or "A community in the Fediverse",
+    }
+
+    # Optional: icon and image URLs
+    if actor.icon:
+        data["icon"] = {
+            "type": "Image",
+            "mediaType": "image/jpeg",  # Modify as needed
+            "url": request.build_absolute_uri(actor.icon.url),
+        }
+    if actor.image:
+        data["image"] = {
+            "type": "Image",
+            "mediaType": "image/jpeg",  # Modify as needed
+            "url": request.build_absolute_uri(actor.image.url),
+        }
 
     return JsonResponse(data, content_type="application/activity+json")
 
@@ -199,6 +267,57 @@ def followers(request, username):
         return JsonResponse({'error': f'invalid page number: {page_num}'}, status=404)
 
 
+@csrf_exempt
+def community_inbox(request, community_name):
+    if request.method == 'POST':
+        # Parse and handle the POST request for the community
+        activity = json.loads(request.body)
+        activity_type = activity.get("type")
+        
+        # Retrieve the community actor
+        try:
+            community_actor = LocalActor.objects.get(preferred_username=community_name)
+
+        except LocalActor.DoesNotExist:
+            return JsonResponse({"error": "Community not found"}, status=404)
+        
+        # Handle the "Create" activity (i.e., a new post directed to this community)
+        if activity_type == "Create" and "object" in activity:
+            post_content = activity["object"].get("content")
+            post_author = activity["actor"]
+
+            # Log for debugging
+            print(f"Received a post for community '{community_name}' from '{post_author}' with content: {post_content}")
+
+            # Save or process the post here
+            # This could involve creating a new Note object or aactornother model to track community posts
+            post = Note.objects.create(
+                local_actor=community_actor,  # The community actor receiving the post
+                content=post_content,
+                attributed_to=post_author,
+            )
+
+            # Generate an "Announce" activity to notify followers of this community
+            announce_activity = {
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "type": "Announce",
+                "actor": community_actor.actor_uri,
+                "object": activity["object"]["id"],  # ID of the original post
+                "to": f"{community_actor.actor_uri}/followers",  # Announce to followers
+            }
+
+            # Log announce activity for debugging
+            print(f"Announcing new post for community '{community_name}' to followers.")
+
+            # Send the announce activity to followers (this would be sent over HTTP in a real implementation)
+            # Example: send_to_followers(announce_activity)
+
+            return JsonResponse({"status": "Activity received and announced"}, status=200)
+        
+        # If the activity type is not supported
+        return JsonResponse({"error": "Unsupported activity type"}, status=400)
+    
+    return JsonResponse({"error": "Invalid request"}, status=400)
 
 @csrf_exempt
 def inbox(request, username):
@@ -473,4 +592,23 @@ def validate_post_request(request, activity):
         return JsonResponse({'error': 'invalid signature'}, status=401)
 
     return None
+
+def handle_undo_follow(to_undo, local_actor):
+    """
+    Handles 'Undo' activities specifically for 'Follow' actions.
+    """
+    # Ensure the Undo is specifically for a 'Follow' activity
+    if to_undo.get('type') == 'Follow':
+        follower_url = to_undo['actor']  # The actor who was following
+        follow_target = to_undo['object']  # The community being followed
+
+        # Confirm the follow target matches the local actor's URL
+        if follow_target == local_actor.url:
+            try:
+                remote_actor = RemoteActor.objects.get(url=follower_url)
+                local_actor.followers.remove(remote_actor)
+                logger.debug(f"Removed follower {remote_actor.username} from {local_actor.preferred_username}")
+            except RemoteActor.DoesNotExist:
+                logger.warning(f"No follower found with URL: {follower_url}")
+
 

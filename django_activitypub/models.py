@@ -19,6 +19,8 @@ class ActorChoices(models.TextChoices):
     PERSON = 'P', 'Person'
     SERVICE = 'S', 'Service'
     COMMUNITY = 'C', 'Community'
+    GROUP = 'G', 'Group'  # New choice for Group actor
+
 
 
 class LocalActorManager(models.Manager):
@@ -53,6 +55,8 @@ class LocalActor(models.Model):
     community_name = models.CharField(max_length=255, null=True, blank=True)
     community_description = models.TextField(null=True, blank=True)
     objects = LocalActorManager()
+    created_at = models.DateTimeField(auto_now_add=True)  # Automatically sets on creation
+    updated_at = models.DateTimeField(auto_now=True)      # Automatically updates on each save
 
     class Meta:
         indexes = [
@@ -113,9 +117,26 @@ class LocalActor(models.Model):
 class RemoteActorManager(models.Manager):
     def get_or_create_with_url(self, url):
         try:
+            # Try to get the existing RemoteActor instance by URL
             instance = self.get(url=url)
-            return instance, False  # Indicate that the instance was not created.
+            
+            # Fetch updated profile data
+            data = fetch_remote_profile(url)
+            updated = False  # Track if any data was updated
+            
+            # Update the instance if profile data has changed
+            if instance.profile != data:
+                instance.profile = data
+                updated = True  # Mark instance as updated
+            
+            # Save the updated instance only if changes were made
+            if updated:
+                instance.save()
+            
+            # Return instance with a flag indicating it wasn't newly created
+            return instance, False
         except RemoteActor.DoesNotExist:
+            # If no instance is found, create a new one
             data = fetch_remote_profile(url)
             parsed = urllib.parse.urlparse(url)
             instance = self.create(
@@ -124,25 +145,35 @@ class RemoteActorManager(models.Manager):
                 url=url,
                 profile=data,
             )
-            return instance, True  # Indicate that the instance was created.
+            return instance, True  # Indicate that the instance was created
 
     def get_or_create_with_username_domain(self, username, domain):
         try:
-            return self.get(username=username, domain=domain)
+            # Attempt to retrieve by username and domain
+            instance = self.get(username=username, domain=domain)
+            return instance
         except RemoteActor.DoesNotExist:
+            # Fetch profile data via WebFinger
             data = finger(username, domain)
+            
+            # Check if profile data was found
             if 'profile' not in data:
                 return None
+            
             url = data['profile'].get('id')
+            
+            # Check if a RemoteActor already exists by URL
             try:
-                return self.get(url=url)
+                instance = self.get(url=url)
             except RemoteActor.DoesNotExist:
-                return self.create(
+                # If not found, create a new instance
+                instance = self.create(
                     username=username,
                     domain=domain,
                     url=url,
                     profile=data['profile'],
                 )
+            return instance
 
 
 class RemoteActor(models.Model):
@@ -150,6 +181,12 @@ class RemoteActor(models.Model):
     domain = models.CharField(max_length=255)
     url = models.URLField(db_index=True, unique=True)
     profile = models.JSONField(blank=True, default=dict)
+
+    # New fields for managing instance statuses
+    linked = models.BooleanField(default=False)
+    allowed = models.BooleanField(default=True)  # assuming default allowed
+    blocked = models.BooleanField(default=False)
+
     following = models.ManyToManyField(
         LocalActor, through='Follower', related_name='following',
         through_fields=('remote_actor', 'following'),
@@ -249,6 +286,8 @@ class Note(TreeNode):
     content_url = models.URLField(db_index=True)
     likes = models.ManyToManyField(RemoteActor, blank=True, related_name='likes')
     announces = models.ManyToManyField(RemoteActor, blank=True, related_name='announces')
+    attributed_to = models.ForeignKey(LocalActor, on_delete=models.CASCADE, null=True, blank=True)
+
 
     objects = NoteManager.as_manager()
 
