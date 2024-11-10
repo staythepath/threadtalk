@@ -2,16 +2,25 @@ import json
 import re
 import uuid
 import urllib.parse
+import logging  # For logging any issues if needed
+import requests  # For handling HTTP requests to external services
 
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse, resolve
 from django.core.paginator import Paginator
+from django.views import View
 from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+from django.contrib.auth import get_user_model
+
 from django_activitypub.models import ActorChoices, LocalActor, RemoteActor, Follower, Note
 from django_activitypub.signed_requests import signed_post, SignatureChecker
-from django_activitypub.webfinger import fetch_remote_profile, WebfingerException
-import logging
+from django_activitypub.webfinger import fetch_remote_profile, WebfingerException, finger
+
+# Import YourModel if it's still needed in your views
+
+
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -270,54 +279,104 @@ def followers(request, username):
 @csrf_exempt
 def community_inbox(request, community_name):
     if request.method == 'POST':
+        
+        base_uri = 'https://ap.staythepath.lol'  # Set the base URI
+
         # Parse and handle the POST request for the community
         activity = json.loads(request.body)
         activity_type = activity.get("type")
         
-        # Retrieve the community actor
+        # Retrieve the community actor (LocalActor)
         try:
             community_actor = LocalActor.objects.get(preferred_username=community_name)
-
         except LocalActor.DoesNotExist:
             return JsonResponse({"error": "Community not found"}, status=404)
         
         # Handle the "Create" activity (i.e., a new post directed to this community)
         if activity_type == "Create" and "object" in activity:
             post_content = activity["object"].get("content")
-            post_author = activity["actor"]
+            post_author_url = activity["actor"]
 
             # Log for debugging
-            print(f"Received a post for community '{community_name}' from '{post_author}' with content: {post_content}")
+            logger.debug(f"Received a post for community '{community_name}' from '{post_author_url}' with content: {post_content}")
 
-            # Save or process the post here
-            # This could involve creating a new Note object or aactornother model to track community posts
-            post = Note.objects.create(
+            # Fetch the LocalActor instance for person_actor (for 'attributed_to' field)
+            try:
+                person_actor = LocalActor.objects.get(preferred_username="person_actor")  # Use preferred_username
+            except LocalActor.DoesNotExist:
+                logger.error(f"Person actor not found.")
+                return JsonResponse({"error": "Person actor not found"}, status=404)
+
+            # Create a new post directly using the Note model
+            note = Note.objects.create(
                 local_actor=community_actor,  # The community actor receiving the post
                 content=post_content,
-                attributed_to=post_author,
+                content_url=f'{base_uri}/pub/{post_author_url}/{uuid.uuid4()}',
+
+                attributed_to=person_actor  # Assign the LocalActor instance to attributed_to
             )
 
-            # Generate an "Announce" activity to notify followers of this community
-            announce_activity = {
-                "@context": "https://www.w3.org/ns/activitystreams",
-                "type": "Announce",
-                "actor": community_actor.actor_uri,
-                "object": activity["object"]["id"],  # ID of the original post
-                "to": f"{community_actor.actor_uri}/followers",  # Announce to followers
+            # Prepare "Create" activity to be sent to the Lemmy community inbox
+            create_activity = {
+                "@context": ["https://www.w3.org/ns/activitystreams", "https://w3id.org/security/v1"],
+                "type": "Create",
+                "actor": community_actor.account_url,  # Use the community actor's account URL
+                "to": [community_actor.account_url, "https://www.w3.org/ns/activitystreams#Public"],
+                "cc": [f"{community_actor.account_url}/followers"],
+                "object": {
+                    "type": "Page",
+                    "id": f"{base_uri}/post/{note.id}",  # Use the Note ID for the post URL
+                    "attributedTo": person_actor.account_url,  # Corrected to use the person_actor's account_url
+                    "to": [community_actor.account_url, "https://www.w3.org/ns/activitystreams#Public"],
+                    "audience": community_actor.account_url,
+                    "name": title,
+                    "content": f"<p>{message}</p>",
+                    "mediaType": "text/html",
+                    "source": {
+                        "content": message,
+                        "mediaType": "text/markdown"
+                    },
+                    "sensitive": False,
+                    "commentsEnabled": True,
+                    "published": note.published_at.isoformat(),
+                    "updated": note.updated_at.isoformat() if note.updated_at else None
+                }
             }
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+################################LOOOOOOOOOOOOOOOOOOOOOOK HHHHHHHHHEEEEEEEEEEEEEEEERRRRRRRRRRRREEEEEEEEEE###########################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+###################################################################################################################################
+            # Send "Create" activity to the dynamically defined Lemmy community inbox
+            self.send_to_community_inbox(create_activity, community_inbox=community_inbox)
 
-            # Log announce activity for debugging
-            print(f"Announcing new post for community '{community_name}' to followers.")
+            return JsonResponse({
+                'message': "Post successfully created and sent to Lemmy community.",
+                'content_url': create_activity["object"]["id"]
+            })
 
-            # Send the announce activity to followers (this would be sent over HTTP in a real implementation)
-            # Example: send_to_followers(announce_activity)
 
-            return JsonResponse({"status": "Activity received and announced"}, status=200)
-        
-        # If the activity type is not supported
-        return JsonResponse({"error": "Unsupported activity type"}, status=400)
-    
-    return JsonResponse({"error": "Invalid request"}, status=400)
 
 @csrf_exempt
 def inbox(request, username):
@@ -610,5 +669,578 @@ def handle_undo_follow(to_undo, local_actor):
                 logger.debug(f"Removed follower {remote_actor.username} from {local_actor.preferred_username}")
             except RemoteActor.DoesNotExist:
                 logger.warning(f"No follower found with URL: {follower_url}")
+
+class NodeInfo(View):
+    def get(self, request, *args, **kwargs):
+        # Define the metadata about your instance for the nodeinfo endpoint
+        node_info = {
+            "version": "2.0",
+            "software": {
+                "name": "YourSoftwareName",  # Customize this
+                "version": "YourVersion"      # Customize this
+            },
+            "protocols": ["activitypub"],
+            "services": {
+                "inbound": [],
+                "outbound": []
+            },
+            "openRegistrations": False,  # Adjust based on your instance's policy
+            "usage": {
+                "users": {
+                    "total": 100  # Replace with actual user count if available
+                }
+            },
+            "metadata": {}
+        }
+        return JsonResponse(node_info, content_type="application/json")
+    
+class SiteInfo(View):
+    def get(self, request, *args, **kwargs):
+        # Provide general information about the site for the site info endpoint
+        site_data = {
+            "site_name": "Your Site Name",          # Customize as needed
+            "description": "Your Site Description", # Customize as needed
+            "version": "YourVersion",               # Customize version
+            # Add any other relevant site data here
+        }
+        return JsonResponse(site_data, content_type="application/json")
+
+
+
+
+class PostDetail(View):
+    def get(self, request, username, pk, *args, **kwargs):
+        try:
+            # Fetch the Note based on the author's username and the primary key
+            post = Note.objects.get(local_actor__preferred_username=username, pk=pk)
+            data = {
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "type": "Note",
+                "id": post.content_url,  # Use content_url as the unique identifier
+                "content": post.content,
+                "published": post.published_at.isoformat(),
+                "attributedTo": f"https://ap.staythepath.lol/pub/{username}/",
+            }
+            return JsonResponse(data, content_type="application/activity+json")
+        except Note.DoesNotExist:
+            return JsonResponse({"error": "Not Found"}, status=404)
+
+
+        
+@method_decorator(csrf_exempt, name='dispatch')
+class SetupGroupActor(View):
+    def post(self, request, *args, **kwargs):
+        data = json.loads(request.body)
+        group_name = data.get('group_name')
+        group_description = data.get('group_description')
+
+        # Extract URLs for icon and image
+        group_icon_url = data.get('icon', {}).get('url')
+        group_image_url = data.get('image', {}).get('url')
+
+        group_langs = data.get('language', [{"identifier": "en", "name": "English"}])
+
+        if not group_name or not group_description:
+            return JsonResponse({"error": "group_name and group_description are required."}, status=400)
+
+        preferred_username = group_name.lower().replace(" ", "_")
+
+        # Create a unique user for this group
+        unique_username = f"group_{preferred_username}_{uuid.uuid4().hex[:6]}"
+        user = get_user_model().objects.create_user(username=unique_username, password='groupdefaultpass')
+
+        # Create or retrieve the group actor
+        group_actor, actor_created = LocalActor.objects.get_or_create(
+            user=user,
+            preferred_username=preferred_username,
+            defaults={
+                'actor_type': 'G',  # 'G' for Group
+                'domain': 'ap.staythepath.lol',
+                'name': group_name,
+                'summary': group_description,
+                'icon': group_icon_url,
+                'image': group_image_url,
+                'community_name': group_name,
+                'community_description': group_description
+            }
+        )
+
+        # Assign URLs for ActivityPub endpoints under the /c/ path
+        group_actor.inbox = f"/c/{preferred_username}/inbox/"
+        group_actor.outbox = f"/c/{preferred_username}/outbox/"
+
+        # Set custom fields
+        group_actor.language = group_langs
+        group_actor.postingRestrictedToMods = False
+
+        # Optional endpoints or settings
+        shared_inbox_url = f"https://{group_actor.domain}/inbox"
+        group_actor.endpoints = {'sharedInbox': shared_inbox_url}
+        
+        # Set public key info
+        group_actor.publicKey = {
+            "id": f"https://ap.staythepath.lol/c/{preferred_username}#main-key",
+            "owner": f"https://ap.staythepath.lol/c/{preferred_username}",
+            "publicKeyPem": group_actor.public_key
+        }
+
+        # Save group actor with updated attributes
+        group_actor.save()
+
+        # Send response with all attributes using /c/ URLs
+        return JsonResponse({
+            "id": f"https://ap.staythepath.lol/c/{preferred_username}/",
+            "type": "Group",
+            "preferredUsername": group_actor.preferred_username,
+            "name": group_actor.name,
+            "summary": group_actor.summary,
+            "source": {
+                "content": group_actor.community_description,
+                "mediaType": "text/markdown"
+            },
+            "sensitive": False,
+            "icon": {
+                "type": "Image",
+                "url": group_icon_url
+            },
+            "image": {
+                "type": "Image",
+                "url": group_image_url
+            },
+            "inbox": f"https://ap.staythepath.lol/c/{preferred_username}/inbox/",
+            "followers": f"https://ap.staythepath.lol/c/{preferred_username}/followers/",
+            "attributedTo": f"https://ap.staythepath.lol/c/{preferred_username}/moderators",
+            "featured": f"https://ap.staythepath.lol/c/{preferred_username}/featured",
+            "postingRestrictedToMods": group_actor.postingRestrictedToMods,
+            "endpoints": {
+                "sharedInbox": shared_inbox_url
+            },
+            "outbox": f"https://ap.staythepath.lol/c/{preferred_username}/outbox/",
+            "publicKey": group_actor.publicKey,
+            "language": group_langs,
+            "published": group_actor.created_at.isoformat(),
+            "updated": group_actor.updated_at.isoformat()
+        }, content_type="application/activity+json")
+
+
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class SetupServiceActor(View):
+    def post(self, request, *args, **kwargs):
+        data = json.loads(request.body)
+        username = data.get('username', 'tester')  # Default to 'tester' if no username is provided
+        password = data.get('password', 'testpassword')
+        
+        user, created = get_user_model().objects.get_or_create(
+            username=username,
+            defaults={'password': password}
+        )
+        actor, actor_created = LocalActor.objects.get_or_create(
+            user=user,
+            defaults={
+                'preferred_username': username,
+                'domain': 'ap.staythepath.lol',
+                'name': username,
+                'actor_type': 'S'
+            }
+        )
+        base_uri = 'https://ap.staythepath.lol'
+        data = {
+            'user_created': created,
+            'actor_created': actor_created,
+            'base_uri': base_uri
+        }
+        return JsonResponse(data)
+    
+@method_decorator(csrf_exempt, name='dispatch')
+class SetupCommunityActor(View):
+    def post(self, request, *args, **kwargs):
+        data = json.loads(request.body)
+        community_name = data.get('community_name')
+        community_description = data.get('community_description')
+
+        if not community_name or not community_description:
+            return JsonResponse({"error": "community_name and community_description are required."}, status=400)
+
+        # Generate a unique username for each community
+        unique_username = f"community_{community_name.lower().replace(' ', '_')}_{uuid.uuid4().hex[:6]}"
+        
+        # Create a unique user for this community
+        user = get_user_model().objects.create_user(username=unique_username, password='adminpassword')
+
+        preferred_username = community_name.lower().replace(" ", "_")
+
+        # Now create the LocalActor for this new user
+        community_actor = LocalActor.objects.create(
+            user=user,
+            preferred_username=preferred_username,
+            actor_type='C',  # 'C' for Community
+            domain='ap.staythepath.lol',
+            name=community_name,
+            summary=community_description
+        )
+
+        # Dynamically link to the actor's inbox and outbox routes
+        community_actor.inbox = reverse('activitypub-inbox', kwargs={'username': preferred_username})
+        community_actor.outbox = reverse('activitypub-outbox', kwargs={'username': preferred_username})
+        community_actor.save()
+
+        return JsonResponse({
+            'message': f"Community actor '{community_name}' created.",
+            'actor_url': community_actor.account_url
+        })
+
+class Root(View):
+    def get(self, request, *args, **kwargs):
+        data = {
+            "name": "StayThePath ActivityPub Server",
+            "description": "This server aggregates posts from the Fediverse.",
+            "urls": {
+                "nodeinfo": "/nodeinfo/2.0.json",
+                "webfinger": "/.well-known/webfinger",
+                "public_inbox": "/pub/community2/inbox/"  # Update with relevant public inbox if needed
+            }
+        }
+        return JsonResponse(data)
+    
+class FederatedInstances(View):
+    def get(self, request, *args, **kwargs):
+        # Aggregate RemoteActor domains to identify instances
+        linked_domains = RemoteActor.objects.filter(profile__linked=True).values_list('domain', flat=True).distinct()
+        allowed_domains = RemoteActor.objects.filter(profile__allowed=True).values_list('domain', flat=True).distinct()
+        blocked_domains = RemoteActor.objects.filter(profile__blocked=True).values_list('domain', flat=True).distinct()
+
+        data = {
+            "federated_instances": {
+                "linked": list(linked_domains),
+                "allowed": list(allowed_domains),
+                "blocked": list(blocked_domains)
+            }
+        }
+        return JsonResponse(data, content_type="application/json")
+
+@method_decorator(csrf_exempt, name='dispatch')
+class SetupPersonActor(View):
+    def post(self, request, *args, **kwargs):
+        data = json.loads(request.body)
+        username = data.get('username', 'tester')  # Default to 'tester' if no username is provided
+        password = data.get('password', 'testpassword')
+        
+        user, created = get_user_model().objects.get_or_create(
+            username=username,
+            defaults={'password': password}
+        )
+        actor, actor_created = LocalActor.objects.get_or_create(
+            user=user,
+            defaults={
+                'preferred_username': username,
+                'domain': 'ap.staythepath.lol',
+                'name': username,
+                'actor_type': 'P'
+            }
+        )
+        base_uri = 'https://ap.staythepath.lol'
+        data = {
+            'user_created': created,
+            'actor_created': actor_created,
+            'base_uri': base_uri
+        }
+        return JsonResponse(data)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class SendNote(View):
+    def post(self, request, *args, **kwargs):
+        data = json.loads(request.body)
+        username = data.get('username', 'tester')
+        message = data.get('message', 'This is a test post content.')
+        
+        try:
+            # Retrieve the user and associated LocalActor
+            user = get_user_model().objects.get(username=username)
+            local_actor = LocalActor.objects.get(user=user)
+        except (get_user_model().DoesNotExist, LocalActor.DoesNotExist):
+            return JsonResponse({"error": "User or LocalActor not found"}, status=404)
+
+        # Construct base URI and content URL
+        base_uri = 'https://ap.staythepath.lol'
+        content_url = f'{base_uri}/pub/{user.username}/{uuid.uuid4()}/'  # Create a unique URL for the post
+
+        # Format the content as HTML for ActivityPub compatibility (e.g., for Mastodon)
+        formatted_content = f"<p>{message}</p>"
+
+        # Publish the note (similar to `YourModel.publish` logic)
+        note, created = Note.objects.get_or_create(
+            local_actor=local_actor,
+            content=formatted_content,
+            content_url=content_url,
+            defaults={'attributed_to': local_actor}
+        )
+
+        # If the note was successfully created or retrieved, send it to Mastodon
+        if created:
+            activity_data = {
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "type": "Create",
+                "id": content_url,
+                "actor": local_actor.account_url,
+                "object": {
+                    "type": "Note",
+                    "id": content_url,
+                    "attributedTo": local_actor.account_url,
+                    "content": formatted_content,
+                    "published": note.published_at.isoformat(),
+                    "to": ["https://www.w3.org/ns/activitystreams#Public"],
+                    "cc": [f"{local_actor.account_url}/followers"]
+                }
+            }
+
+            # Send signed Create activity to followers (like Mastodon)
+            for follower in local_actor.followers.all():
+                inbox_url = follower.profile.get('inbox', follower.url + '/inbox')
+
+                response = signed_post(
+                    url=inbox_url,
+                    private_key=local_actor.private_key.encode('utf-8'),
+                    public_key_url=f"{local_actor.account_url}#main-key",
+                    body=json.dumps(activity_data),
+                )
+                if response.status_code != 202:
+                    logger.error(f"Failed to send activity to {inbox_url}. Status: {response.status_code}")
+
+            response_data = {'message': "Note was successfully created and published.", 'content_url': content_url}
+        else:
+            response_data = {'error': "Failed to create or publish the note."}
+
+        return JsonResponse(response_data)
+
+
+
+    
+@method_decorator(csrf_exempt, name='dispatch')
+class SendLemmyPost(View):
+    def post(self, request, *args, **kwargs):
+        # Extract data from the request
+        data = json.loads(request.body)
+        username = data.get('username')
+        message = data.get('message', 'This is a test post content.')
+        title = data.get('title', 'Default Post Title')
+        community_name = data.get('community_name')
+        logger.debug(f"Using community name: {community_name}")
+
+        # Retrieve the user and base URI
+        try:
+            user = get_user_model().objects.get(username=username)
+            local_actor = LocalActor.objects.get(user=user)  # Get LocalActor instance
+        except (get_user_model().DoesNotExist, LocalActor.DoesNotExist):
+            logger.error(f"User or LocalActor not found for username: {username}")
+            return JsonResponse({"error": "User or LocalActor not found"}, status=404)
+
+        base_uri = 'https://ap.staythepath.lol'
+
+        # Construct community URLs dynamically using base_uri
+        community_inbox = f"{base_uri}/c/{community_name}/inbox"
+        community_actor = f"{base_uri}/c/{community_name}"
+
+        # Fetch the LocalActor instance for person_actor (for 'attributed_to' field)
+        try:
+            person_actor = LocalActor.objects.get(preferred_username="person_actor")  # Ensure this is a LocalActor instance
+        except LocalActor.DoesNotExist:
+            logger.error(f"Person actor not found.")
+            return JsonResponse({"error": "Person actor not found"}, status=404)
+
+        # Create a new post directly using the Note model
+        note = Note.objects.create(
+            local_actor=local_actor,
+            content=message,
+            content_url=f'{base_uri}/pub/{username}/{uuid.uuid4()}',  # Create a unique URL for the post
+            attributed_to=person_actor  # Assign the LocalActor instance to attributed_to
+        )
+
+        # Prepare "Create" activity to be sent to the Lemmy community inbox
+        create_activity = {
+            "@context": ["https://www.w3.org/ns/activitystreams", "https://w3id.org/security/v1"],
+            "type": "Create",
+            "actor": local_actor.account_url,  # Use the actor's account URL directly
+            "to": [community_actor, "https://www.w3.org/ns/activitystreams#Public"],
+            "cc": [f"{community_actor}/followers"],
+            "object": {
+                "type": "Page",
+                "id": f"{base_uri}/post/{note.id}",  # Use the Note ID for the post URL
+                "attributedTo": local_actor.account_url,  # Corrected to use LocalActor's URL
+                "to": [community_actor, "https://www.w3.org/ns/activitystreams#Public"],
+                "audience": community_actor,
+                "name": title,
+                "content": f"<p>{message}</p>",
+                "mediaType": "text/html",
+                "source": {
+                    "content": message,
+                    "mediaType": "text/markdown"
+                },
+                "sensitive": False,
+                "commentsEnabled": True,
+                "published": note.published_at.isoformat(),
+                "updated": note.updated_at.isoformat() if note.updated_at else None
+            }
+        }
+
+        # Send "Create" activity to the dynamically defined Lemmy community inbox
+        self.send_to_community_inbox(create_activity, community_inbox=community_inbox)
+
+        return JsonResponse({
+            'message': "Post successfully created and sent to Lemmy community.",
+            'content_url': create_activity["object"]["id"]
+        })
+
+    def send_to_community_inbox(self, activity_data, community_inbox):
+        """
+        Helper function to post data to the community inbox.
+        """
+        headers = {"Content-Type": "application/activity+json"}
+        try:
+            response = requests.post(community_inbox, json=activity_data, headers=headers)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to send activity to Lemmy community inbox: {e}")
+
+
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class FollowUser(View):
+    def post(self, request, *args, **kwargs):
+        data = json.loads(request.body)
+        local_actor_username = data.get('local_actor_username')
+        remote_actor_handle = data.get('remote_actor_handle')
+        
+        if not local_actor_username or not remote_actor_handle:
+            return JsonResponse({"error": "Both local_actor_username and remote_actor_handle are required."}, status=400)
+
+        try:
+            username, domain = remote_actor_handle.lstrip('@').split('@')
+            webfinger_data = finger(username, domain)
+            profile_data = webfinger_data.get("profile")
+            remote_actor_url = profile_data.get("id")
+            inbox_url = profile_data.get("inbox")
+        except Exception as e:
+            return JsonResponse({"error": "WebFinger lookup failed.", "details": str(e)}, status=400)
+        
+        local_actor = LocalActor.objects.get(preferred_username=local_actor_username)
+        follow_activity = {
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "id": f"https://{local_actor.domain}/{uuid.uuid4()}",
+            "type": "Follow",
+            "actor": local_actor.account_url,
+            "object": remote_actor_url
+        }
+        
+        response = signed_post(
+            url=inbox_url,
+            private_key=local_actor.private_key.encode('utf-8'),
+            public_key_url=f"{local_actor.account_url}#main-key",
+            body=json.dumps(follow_activity)
+        )
+        
+        if response.status_code == 202:
+            return JsonResponse({"message": f"Successfully followed {remote_actor_handle}"})
+        else:
+            return JsonResponse({"error": f"Failed to follow: {response.status_code} {response.text}"})
+
+@method_decorator(csrf_exempt, name='dispatch')
+class UnfollowUser(View):
+    def post(self, request, *args, **kwargs):
+        data = json.loads(request.body)
+        local_actor_username = data.get('local_actor_username')
+        remote_actor_url = data.get('remote_actor_url')
+        
+        if not local_actor_username or not remote_actor_url:
+            return JsonResponse({"error": "Both local_actor_username and remote_actor_url are required."}, status=400)
+
+        remote_actor = RemoteActor.objects.get(url=remote_actor_url)
+        local_actor = LocalActor.objects.get(preferred_username=local_actor_username)
+        
+        undo_follow_activity = {
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "id": f"https://{local_actor.domain}/{uuid.uuid4()}",
+            "type": "Undo",
+            "actor": local_actor.account_url,
+            "object": {
+                "type": "Follow",
+                "id": f"https://{local_actor.domain}/{uuid.uuid4()}",
+                "actor": local_actor.account_url,
+                "object": remote_actor.url
+            }
+        }
+        
+        inbox_url = remote_actor.profile.get('inbox', remote_actor.url + '/inbox')
+        response = signed_post(
+            url=inbox_url,
+            private_key=local_actor.private_key.encode('utf-8'),
+            public_key_url=f"{local_actor.account_url}#main-key",
+            body=json.dumps(undo_follow_activity)
+        )
+        
+        if response.status_code == 202:
+            return JsonResponse({"message": f"Successfully unfollowed {remote_actor.handle}"})
+        else:
+            return JsonResponse({"error": f"Failed to unfollow: {response.status_code} {response.text}"})
+
+@method_decorator(csrf_exempt, name='dispatch')
+class FollowCommunity(View):
+    def post(self, request, *args, **kwargs):
+        data = json.loads(request.body)
+        local_actor_username = data.get('local_actor_username')
+        community_url = data.get('community_url')
+        
+        if not local_actor_username or not community_url:
+            return JsonResponse({"error": "Both local_actor_username and community_url are required."}, status=400)
+        
+        try:
+            # Parse community WebFinger data (assuming Lemmy supports this)
+            username, domain = community_url.split('@')[1].split('/')[-1], community_url.split('@')[-1]
+            webfinger_data = finger(username, domain)
+            profile_data = webfinger_data.get("profile")
+            community_actor_url = profile_data.get("id")
+            inbox_url = profile_data.get("inbox")
+        except Exception as e:
+            return JsonResponse({"error": "Failed to retrieve community WebFinger data.", "details": str(e)}, status=400)
+        
+        # Retrieve the local actor who is following the community
+        local_actor = LocalActor.objects.get(preferred_username=local_actor_username)
+        
+        follow_activity = {
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "id": f"https://{local_actor.domain}/{uuid.uuid4()}",
+            "type": "Follow",
+            "actor": local_actor.account_url,
+            "object": community_actor_url
+        }
+        
+        # Send signed follow request
+        response = signed_post(
+            url=inbox_url,
+            private_key=local_actor.private_key.encode('utf-8'),
+            public_key_url=f"{local_actor.account_url}#main-key",
+            body=json.dumps(follow_activity)
+        )
+        
+        if response.status_code == 202:
+            return JsonResponse({"message": f"Successfully followed community {community_url}"})
+        else:
+            return JsonResponse({"error": f"Failed to follow community: {response.status_code} {response.text}"})
+        
+@method_decorator(csrf_exempt, name='dispatch')
+class CommunityDetail(View):
+    def get(self, request, community_name, *args, **kwargs):
+        # Fetch the community actor using the community name
+        community_actor = get_object_or_404(LocalActor, community_name=community_name)
+
+        data = {
+            "id": community_actor.account_url,
+            "name": community_actor.name,
+            "description": community_actor.community_description,
+        }
+        return JsonResponse(data)
 
 
